@@ -44,10 +44,10 @@
 
 namespace fabgl {
 
-
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // CVBS Standards
+
 
 
 // interlaced PAL-B (max 640x480)
@@ -57,7 +57,8 @@ static const struct CVBS_I_PAL_B : CVBSParams {
     
     //sampleRate_hz                = 17750000.0;  // = 1136/64*1000000
     //sampleRate_hz                = 4433618.75*4;  // = 1136/64*1000000
-    sampleRate_hz                = 17500000.0; // 1120/64*1000000
+    //sampleRate_hz                = 17500000.0; // 1120/64*1000000
+    sampleRate_hz                  = 13875000.0; // teletekst dotclock * 2
     
     subcarrierFreq_hz            = 4433618.75;
     line_us                      = 64.0;
@@ -89,6 +90,7 @@ static const struct CVBS_I_PAL_B : CVBSParams {
     fieldStartingLine[1]         = 2;
     fields                       = 2;
     interlaceFactor              = 2;
+    teletextLine                 = 17;  // start line of Teletekst after visible
   }
 
   double getComposite(bool oddLine, double phase, double red, double green, double blue, double * Y) const {
@@ -256,6 +258,7 @@ static CVBSParams const * CVBS_Standards[] = {
 
 volatile int          CVBSGenerator::s_scanLine;
 volatile bool         CVBSGenerator::s_VSync;
+volatile bool         CVBSGenerator::s_teletextState;
 volatile int          CVBSGenerator::s_field;
 volatile int          CVBSGenerator::s_frame;
 volatile int          CVBSGenerator::s_frameLine;
@@ -271,6 +274,7 @@ volatile bool         CVBSGenerator::s_lineSwitch;
   volatile uint64_t s_cvbsctrlcycles = 0;
 #endif
 
+volatile uint16_t teletextLineBuf[768];
 
 CVBSGenerator::CVBSGenerator() :
   m_DMAStarted(false),
@@ -378,7 +382,7 @@ void CVBSGenerator::runDMA(lldesc_t volatile * dmaBuffers)
     I2S0.out_link.start = 1;
     I2S0.conf.tx_start  = 1;
 
-    dac_i2s_enable();
+    dac_i2s_enable();   // builtin DAC is 8 bit per channel
     if (usePLL) {
       // enable both DACs
       dac_output_enable(DAC_CHANNEL_1); // GPIO25: DAC1, right channel
@@ -405,6 +409,7 @@ volatile lldesc_t * CVBSGenerator::setDMANode(int index, volatile uint16_t * buf
   m_DMAChain[index].buf          = (uint8_t*) buf;
   return &m_DMAChain[index];
 }
+
 
 
 void CVBSGenerator::closeDMAChain(int index)
@@ -497,7 +502,8 @@ void CVBSGenerator::buildDMAChain()
   }
 
   // setup line buffer
-  m_lineBuf = (volatile uint16_t * *) malloc(CVBS_ALLOCATED_LINES * sizeof(uint16_t*));
+  m_lineBuf = (volatile uint16_t * *) malloc((CVBS_ALLOCATED_LINES) * sizeof(uint16_t*));
+
   int hsyncStart = 0;
   int hsyncEnd   = (m_params->hsync_us + m_params->hsyncEdge_us) / m_sample_us;
   int hedgeLen   = ceil(m_params->hsyncEdge_us / m_sample_us);
@@ -514,7 +520,10 @@ void CVBSGenerator::buildDMAChain()
         m_lineBuf[l][s ^ 1] = m_params->blackLevel << 8;                                                     // back porch, active line, front porch
     }
   }
-  
+
+    // clear teletext line buffer  
+    for (int t=0; t<768; t++) teletextLineBuf[t]=m_params->blackLevel<<8;
+
   // line sample (full line, from hsync to front porch) to m_colorBurstLUT[] item
   s_lineSampleToSubCarrierSample = (volatile scPhases_t *) heap_caps_malloc(lineSamplesCount * sizeof(scPhases_t), MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
   double K = m_params->subcarrierFreq_hz * CVBS_SUBCARRIERPHASES / m_params->sampleRate_hz;
@@ -919,7 +928,7 @@ void CVBSGenerator::stop()
         free(m_lineBuf);
         m_lineBuf = nullptr;
       }
-      
+
       for (int frame = 0; frame < m_params->frameGroupCount; ++frame)
         if (m_subCarrierPhases[frame]) {
           heap_caps_free((void*)m_subCarrierPhases[frame]);
@@ -931,6 +940,7 @@ void CVBSGenerator::stop()
         s_lineSampleToSubCarrierSample = nullptr;
       }
       
+
     }
 
   }
@@ -942,7 +952,6 @@ void CVBSGenerator::setDrawScanlineCallback(CVBSDrawScanlineCallback drawScanlin
   m_drawScanlineCallback = drawScanlineCallback;
   m_drawScanlineArg      = arg;
 }
-
 
 void IRAM_ATTR CVBSGenerator::ISRHandler(void * arg)
 {
@@ -971,6 +980,7 @@ void IRAM_ATTR CVBSGenerator::ISRHandler(void * arg)
     auto drawScanlineCallback  = ctrl->m_drawScanlineCallback;
     auto drawScanlineArg       = ctrl->m_drawScanlineArg;
     auto lineBuf               = ctrl->m_lineBuf;
+  //  auto teletextBuf           = ctrl->m_teletextBuf;
     auto firstVisibleFrameLine = ctrl->m_firstVisibleFrameLine[s_field];
     auto lastVisibleFrameLine  = ctrl->m_lastVisibleFrameLine[s_field];
     auto firstColorBurstSample = ctrl->m_firstColorBurstSample;
@@ -999,14 +1009,30 @@ void IRAM_ATTR CVBSGenerator::ISRHandler(void * arg)
         // visible lines
         drawScanlineCallback(drawScanlineArg, fullLineBuf, s_firstVisibleSample, s_scanLine);
         s_scanLine += interlaceFactor; // +2 if interlaced, +1 if progressive
-      } else {
-        // blank lines
-        auto visibleBuf = fullLineBuf + s_firstVisibleSample;
-        uint32_t blackFillX2 = (ctrl->m_params->blackLevel << 8) | (ctrl->m_params->blackLevel << (8 + 16));
-        for (int col = 0; col < s_visibleSamplesCount; col += 2, visibleBuf += 2)
-          *((uint32_t*)(visibleBuf)) = blackFillX2;
+      } 
+      else
+      {
+        // check for Teletekst line(s) here
+
+        #if TELETEXT_VISIBLE
+        if ((s_frameLine == ctrl->m_params->teletextLine)||(s_frameLine == lastVisibleFrameLine+5))
+        #else
+        if (s_frameLine == ctrl->m_params->teletextLine)
+        #endif 
+        {
+               auto visibleBuf = fullLineBuf + s_firstVisibleSample;
+               for (int col = 0; col < 720; col += 1, visibleBuf += 1)
+                   *(visibleBuf) = teletextLineBuf[col]; 
+        }
+        else 
+        {// blank lines
+          auto visibleBuf = fullLineBuf + s_firstVisibleSample;
+          uint32_t blackFillX2 = (ctrl->m_params->blackLevel << 8) | (ctrl->m_params->blackLevel << (8 + 16));
+          for (int col = 0; col < s_visibleSamplesCount; col += 2, visibleBuf += 2)
+            *((uint32_t*)(visibleBuf)) = blackFillX2;
+        }
       }
-      
+
       ++s_activeLineIndex;
       ++s_frameLine;
       ++s_subCarrierPhase;
@@ -1015,7 +1041,10 @@ void IRAM_ATTR CVBSGenerator::ISRHandler(void * arg)
     }
 
     if (s_frameLine >= lastVisibleFrameLine)
-      s_VSync = true;
+    {
+           s_VSync = true;
+           s_teletextState=false;       // reset teletext state flag
+    }
   }
 
   #if FABGLIB_CVBSCONTROLLER_PERFORMANCE_CHECK
@@ -1025,6 +1054,37 @@ void IRAM_ATTR CVBSGenerator::ISRHandler(void * arg)
   I2S0.int_clr.val = I2S0.int_st.val;
 }
 
+
+// write a teletext character in the teletext linebuffer
+void CVBSGenerator::writeTXTbuf(int offset, uint8_t data)
+{
+
+    uint8_t mask=0x01;
+
+    offset<<=4;
+
+    for (int n=0; n<8; n++)
+    {
+        if (data & mask)
+       {
+          teletextLineBuf[offset++]=79<<8;
+          teletextLineBuf[offset++]=79<<8;
+       }
+        else
+       {
+          teletextLineBuf[offset++]=25<<8;
+          teletextLineBuf[offset++]=25<<8;
+        }
+        mask<<=1;
+    }
+}
+
+
+// set the teletext flag
+void CVBSGenerator::clearTxtState()
+{
+    s_teletextState=true;
+}
 
 
 } // namespace fabgl

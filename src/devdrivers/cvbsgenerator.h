@@ -39,7 +39,8 @@
 #include "soc/sens_struct.h"
 
 #include "fabglconf.h"
-
+#define TELETEXT true
+#define TELETEXT_VISIBLE false               // for visible teletext data line at bottom of screen
 
 namespace fabgl {
 
@@ -83,7 +84,7 @@ struct CVBSParams {
   uint8_t         fieldStartingLine[2];           // starting line of each field ([0]=first field, [1]=second field), in range 1..2
   uint8_t         fields;                         // number of fields (max 2)
   uint8_t         interlaceFactor;                // 1 = progressive, 2 = interlaced
-  
+  uint16_t        teletextLine;                   // position of teletext line
   // params ranges:
   //   frame         : 1 ... frameGroupCount
   //   frameLine     : 1 ... fields * fieldLines
@@ -96,11 +97,12 @@ struct CVBSParams {
   
   // phase in radians
   virtual double getColorBurst(bool oddLine, double phase) const = 0;
-  
+
 };
 
 
 #define CVBS_ALLOCATED_LINES 4
+#define TXT_ALLOCATED_LINES 4
 
 
 // increasing this value will require more memory available
@@ -126,6 +128,9 @@ typedef void (*CVBSDrawScanlineCallback)(void * arg, uint16_t * dest, int destSa
 
 class CVBSGenerator {
 
+
+    
+
 public:
 
   CVBSGenerator();
@@ -143,6 +148,10 @@ public:
   static CVBSParams const * getParamsFromDesc(char const * desc);
 
   void run(bool subCarrierOnly = false);
+
+  static void writeTXTbuf(int offset, uint8_t data);
+   static bool txtState()                                  { return s_teletextState; }
+   static void clearTxtState();    
 
   void stop();
   
@@ -164,9 +173,10 @@ public:
   
   int visibleLines()                                          { return m_visibleLines; }           // visible lines in a field
   int visibleSamples()                                        { return s_visibleSamplesCount; }    // visible samples in a line
-    
-  CVBSParams const * params()                                 { return m_params; }
 
+
+
+  CVBSParams const * params()                                 { return m_params; }
 
 private:
 
@@ -188,6 +198,8 @@ private:
   static volatile int           s_activeLineIndex;              // current active line index: 0... active line index (reset for each field)
   static volatile scPhases_t *  s_subCarrierPhase;              // ptr to current subcarrier phase: sample index in m_colorBurstLUT[] LUT, 0..CVBS_SUBCARRIERPHASES*2
   static volatile bool          s_lineSwitch;                   // line switch
+    static volatile bool          s_teletextState;                // flag signalling teletext buffer empty
+  
 
   gpio_num_t                    m_gpio;
   bool                          m_DMAStarted;
@@ -197,11 +209,10 @@ private:
   volatile uint16_t *           m_lsyncBuf;                     // vertical blank, long pulse buffer
   volatile uint16_t *           m_ssyncBuf;                     // vertical blank, short pulse buffer (equalizing pulse)
   volatile uint16_t * *         m_lineBuf;                      // hsync + back porch + line + front porch
-  
+
   // not allocated buffers
   volatile uint16_t *           m_blackBuffer;                  // derived from ending black part of m_ssyncBuf
   int                           m_blackBufferLength;            // number of available samples in m_blackBuffer
-  
   
   intr_handle_t                 m_isr_handle;
   static volatile int16_t       s_visibleSamplesCount;          // visible samples in a line
@@ -226,6 +237,7 @@ private:
   double                        m_sample_us;                    // duration of a sample
   bool                          m_firstActiveFieldLineSwitch[4][2];  // line switch state for first active line at frame (0..) and field (0..)
   
+
   CVBSParams const *            m_params;                       // decides the CVBS standard (PAL, NTSC...)
   
 };
