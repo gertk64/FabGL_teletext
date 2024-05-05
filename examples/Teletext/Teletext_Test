@@ -1,1 +1,4 @@
+Example teletext program with three Teletext pages
 
+After uploading you can choose pages 100 109 and 453 for testing.
+The pages are stored in the pages.h file and are 'raw' 40x24 bytes.
