@@ -156,15 +156,25 @@ void setup() {
   DisplayController.setResolution(MODES_STD[MODES_DEFAULT]);
 }
 
+static const uint8_t parity[128]={
+  0x80,0x01,0x02,0x83,0x04,0x85,0x86,0x07,
+  0x08,0x89,0x8a,0x0b,0x8c,0x0d,0x0e,0x8f,
+  0x10,0x91,0x92,0x13,0x94,0x15,0x16,0x97,
+  0x98,0x19,0x1a,0x9b,0x1c,0x9d,0x9e,0x1f,
+  0x20,0xa1,0xa2,0x23,0xa4,0x25,0x26,0xa7,
+  0xa8,0x29,0x2a,0xab,0x2c,0xad,0xae,0x2f,
+  0xb0,0x31,0x32,0xb3,0x34,0xb5,0xb6,0x37,
+  0x38,0xb9,0xba,0x3b,0xbc,0x3d,0x3e,0xbf,
+  0x40,0xc1,0xc2,0x43,0xc4,0x45,0x46,0xc7,
+  0xc8,0x49,0x4a,0xcb,0x4c,0xcd,0xce,0x4f,
+  0xd0,0x51,0x52,0xd3,0x54,0xd5,0xd6,0x57,
+  0x58,0xd9,0xda,0x5b,0xdc,0x5d,0x5e,0xdf,
+  0xe0,0x61,0x62,0xe3,0x64,0xe5,0xe6,0x67,
+  0x68,0xe9,0xea,0x6b,0xec,0x6d,0x6e,0xef,
+  0x70,0xf1,0xf2,0x73,0xf4,0x75,0x76,0xf7,
+  0xf8,0x79,0x7a,0xfb,0x7c,0xfd,0xfe,0x7f
+};
 
-uint8_t parity(uint8_t c) {
-  uint8_t p = 0;
-  for (int n = 0; n < 8; n++) {
-    if (c & (1 << n)) p++;
-  }
-  if (p & 1) return c;
-  else return c | 0x80;
-}
 
 #if FABGLIB_CVBSCONTROLLER_PERFORMANCE_CHECK
 namespace fabgl {
@@ -184,11 +194,7 @@ void send_header(int page, unsigned char* pagedata) {
   int row;
   char tmTekst[40];
 
-  getLocalTime(&timeinfo);
-  // vul clock run-in en framecode alvast in
-  DisplayController.writeTXTbuf(0, 0b01010101);
-  DisplayController.writeTXTbuf(1, 0b01010101);
-  DisplayController.writeTXTbuf(2, 0b00100111);
+  //getLocalTime(&timeinfo);
 
   // header aanmaken, paginanummer, etc.
   DisplayController.writeTXTbuf(3, hamming[page / 100]);         // bladnummer 1 (paginanummer hondertallen, 0-8) + bit 0 regelnummer
@@ -209,24 +215,45 @@ void send_header(int page, unsigned char* pagedata) {
   DisplayController.writeTXTbuf(12, hamming[0]);  // C11 C12 C13 C14 was 9
 
   // header tekst invullen uit bladzijde (behalve tijd en datum)
-  for (t = 0; t < 24; t++) DisplayController.writeTXTbuf(t + 13, parity(pagedata[t + 8]));
+  for (t = 0; t < 24; t++) DisplayController.writeTXTbuf(t + 13, parity[pagedata[t + 8]]);
 
-  // monteer kloktijd in header
-  sprintf(tmTekst, "%02d-%02d-%02d\003%02d:%02d.%02d", timeinfo.tm_mday, timeinfo.tm_mon, timeinfo.tm_year, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
-  for (t = 0; t < 18; t++) DisplayController.writeTXTbuf(t + 28, parity(tmTekst[t]));
+  // monteer kloktijd in header, deze moet nog vervangen worden door een RTC
+ // sprintf(tmTekst, "%02d-%02d-%02d\003%02d:%02d.%02d", timeinfo.tm_mday, timeinfo.tm_mon, timeinfo.tm_year, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+ // for (t = 0; t < 18; t++) DisplayController.writeTXTbuf(t + 28, parity(tmTekst[t]));
+  DisplayController.writeTXTbuf(37,parity[(timeinfo.tm_hour/10)+48]);
+  DisplayController.writeTXTbuf(38,parity[(timeinfo.tm_hour%10)+48]);
+  DisplayController.writeTXTbuf(39,parity[':']);
+  DisplayController.writeTXTbuf(40,parity[(timeinfo.tm_min/10)+48]);
+  DisplayController.writeTXTbuf(41,parity[(timeinfo.tm_min%10)+48]);
+  DisplayController.writeTXTbuf(42,parity['.']); 
+  DisplayController.writeTXTbuf(43,parity[(timeinfo.tm_sec/10)+48]);
+  DisplayController.writeTXTbuf(44,parity[(timeinfo.tm_sec%10)+48]);
+  
+  timeinfo.tm_sec++;  // pseudo secondes...
+
+  if (timeinfo.tm_sec > 59) {
+    timeinfo.tm_sec = 0;
+    timeinfo.tm_min++;
+
+    if (timeinfo.tm_min > 59) {
+      timeinfo.tm_min = 0;
+      timeinfo.tm_hour++;
+    }
+
+    if (timeinfo.tm_hour > 23) {
+      timeinfo.tm_hour = 0;
+    }
+  }
 }
 
 void send_line(int page, int row, unsigned char* pagedata) {
-  // vul clock run-in en framecode alvast in
-  DisplayController.writeTXTbuf(0, 0b01010101);
-  DisplayController.writeTXTbuf(1, 0b01010101);
-  DisplayController.writeTXTbuf(2, 0b00100111);
+
 
   // stuur regel van bladzijde
   DisplayController.writeTXTbuf(3, hamming[(page / 100) + ((row & 1) << 3)]);  // bladnummer 1 (paginanummer hondertallen, 0-8)
   DisplayController.writeTXTbuf(4, hamming[row >> 1]);                         // + regelnummer t
   for (int s = 0; s < 40; s++) {
-    DisplayController.writeTXTbuf(5 + s, parity(pagedata[row * 40 + s]));
+    DisplayController.writeTXTbuf(5 + s, parity[pagedata[row * 40 + s]]);
   }
 }
 
@@ -246,24 +273,31 @@ pageInfo pages[] = {
 
 void loop() {
   app.runAsync(&DisplayController, 2000);
+  // vul clock run-in en framecode alvast in
+  DisplayController.writeTXTbuf(0, 0b01010101);
+  DisplayController.writeTXTbuf(1, 0b01010101);
+  DisplayController.writeTXTbuf(2, 0b00100111);
 
   DisplayController.clearTxtState();
-  digitalWrite(MYLED, HIGH);
+  digitalWrite(MYLED, LOW);
 
+  // eindeloze lus, RTOS handelt dit als het goed is af..
   while (true) {
-    // teletekst generator vrij?
-    while (DisplayController.txtState() == true) vTaskDelay(1);
-    digitalWrite(MYLED, LOW);
+    // trigger de teletext generator
+    DisplayController.clearTxtState();
 
-    if (currentline == 0) 
-    {
+    // wacht op vrijgave buffer 
+    while (DisplayController.txtState() == true);
+
+    //digitalWrite(MYLED, HIGH);
+
+    if (currentline == 0) {
       send_header(pages[currentpage].pagenumber, pages[currentpage].pagedata);
       currentline++;
-    } 
-    else 
-    {
+    } else {
       send_line(pages[currentpage].pagenumber, currentline, pages[currentpage].pagedata);
       currentline++;
+      //digitalWrite(MYLED, LOW);
 
       // einde bladzijde?
       if (currentline == 25) {
@@ -273,11 +307,8 @@ void loop() {
         if (pages[currentpage].pagenumber == 0) currentpage = 0;
       }
     }
-      // trigger de teletext generator
-      DisplayController.clearTxtState();
-    digitalWrite(MYLED, HIGH);
-    vTaskDelay(50);  //feed the watchdog
+ 
   }
-
+  // hier komt hij nooit als het goed is...
   vTaskDelete(NULL);
 }
