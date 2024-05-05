@@ -67,10 +67,15 @@ public:
   void readScreen(Rect const & rect, RGB888 * destBuf);
 
   void setPaletteItem(int index, RGB888 const & color);
-  
+
   void setMonochrome(bool value);
   bool monochrome()                                         { return m_monochrome; }
 
+   bool txtState() ;//                                 { return m_teletextState; }
+
+void writeTXTbuf(int offset, uint8_t data);
+
+   void clearTxtState();    
 
 protected:
 
@@ -142,12 +147,13 @@ private:
   static void drawScanlineX3(void * arg, uint16_t * dest, int destSample, int scanLine);
 
 
+
   static CVBS16Controller *    s_instance;
 
   static volatile uint16_t * * s_paletteToRawPixel[2];
   
   bool                         m_monochrome;
-  
+
 };
 
 

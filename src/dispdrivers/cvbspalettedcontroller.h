@@ -90,7 +90,6 @@ public:
   
   virtual bool suspendDoubleBuffering(bool value);
 
-
 protected:
 
   void init();

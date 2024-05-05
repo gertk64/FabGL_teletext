@@ -448,6 +448,7 @@ void CVBS16Controller::copyRect(Rect const & source, Rect & updateRect)
 }
 
 
+
 // no bounds check is done!
 void CVBS16Controller::readScreen(Rect const & rect, RGB888 * destBuf)
 {
@@ -705,6 +706,20 @@ void IRAM_ATTR CVBS16Controller::drawScanlineX3(void * arg, uint16_t * dest, int
 
 
 
+bool CVBS16Controller::txtState()
+{ 
+    return CVBSGenerator::txtState(); 
+}
+
+void CVBS16Controller::writeTXTbuf(int offset, uint8_t data)
+{
+    CVBSGenerator::writeTXTbuf(offset,data);
+}
+
+void CVBS16Controller::clearTxtState()
+{
+   CVBSGenerator::clearTxtState();
+}
 
 
 } // end of namespace

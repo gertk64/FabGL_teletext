@@ -86,7 +86,6 @@ public:
   
   virtual bool suspendDoubleBuffering(bool value);
 
-
 protected:
 
   void setDrawScanlineCallback(CVBSDrawScanlineCallback drawScanlineCallback)  { m_CVBSGenerator.setDrawScanlineCallback(drawScanlineCallback, this); }
