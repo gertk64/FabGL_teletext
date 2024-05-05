@@ -1023,6 +1023,8 @@ void IRAM_ATTR CVBSGenerator::ISRHandler(void * arg)
                auto visibleBuf = fullLineBuf + s_firstVisibleSample;
                for (int col = 0; col < 720; col += 1, visibleBuf += 1)
                    *(visibleBuf) = teletextLineBuf[col]; 
+
+               s_teletextState=false;       // reset teletext state flag
         }
         else 
         {// blank lines
@@ -1043,7 +1045,7 @@ void IRAM_ATTR CVBSGenerator::ISRHandler(void * arg)
     if (s_frameLine >= lastVisibleFrameLine)
     {
            s_VSync = true;
-           s_teletextState=false;       // reset teletext state flag
+
     }
   }
 
